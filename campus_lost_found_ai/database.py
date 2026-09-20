@@ -1,113 +1,434 @@
 import os
-import sqlite3
-from datetime import datetime
+import re
 
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-SQLITE_DB = os.getenv("SQLITE_DB", "campus.db")
+import mysql.connector
+from mysql.connector import Error
+
+from dotenv import load_dotenv
 
 
-def using_postgres():
-    return bool(DATABASE_URL)
+# ---------------------------------------------------------
+# LOAD ENVIRONMENT VARIABLES
+# ---------------------------------------------------------
 
+load_dotenv()
+
+
+# ---------------------------------------------------------
+# MYSQL CONFIGURATION
+# ---------------------------------------------------------
+
+MYSQL_HOST = os.getenv(
+    "MYSQL_HOST",
+    "localhost"
+)
+
+MYSQL_PORT = int(
+    os.getenv(
+        "MYSQL_PORT",
+        "3306"
+    )
+)
+
+MYSQL_DATABASE = os.getenv(
+    "MYSQL_DATABASE",
+    "campus_lost_found"
+)
+
+MYSQL_USER = os.getenv(
+    "MYSQL_USER",
+    "root"
+)
+
+MYSQL_PASSWORD = os.getenv(
+    "MYSQL_PASSWORD",
+    ""
+)
+
+
+# ---------------------------------------------------------
+# VALIDATE DATABASE NAME
+# ---------------------------------------------------------
+
+if not re.match(
+    r"^[A-Za-z0-9_]+$",
+    MYSQL_DATABASE
+):
+
+    raise ValueError(
+        "Invalid MYSQL_DATABASE name."
+    )
+
+
+# ---------------------------------------------------------
+# CONNECT TO MYSQL SERVER
+# ---------------------------------------------------------
+
+def connect_server():
+
+    return mysql.connector.connect(
+
+        host=MYSQL_HOST,
+
+        port=MYSQL_PORT,
+
+        user=MYSQL_USER,
+
+        password=MYSQL_PASSWORD
+    )
+
+
+# ---------------------------------------------------------
+# CONNECT TO APPLICATION DATABASE
+# ---------------------------------------------------------
 
 def connect():
-    if using_postgres():
-        import psycopg
-        from psycopg.rows import dict_row
-        return psycopg.connect(DATABASE_URL, row_factory=dict_row)
-    conn = sqlite3.connect(SQLITE_DB)
-    conn.row_factory = sqlite3.Row
-    return conn
 
+    return mysql.connector.connect(
+
+        host=MYSQL_HOST,
+
+        port=MYSQL_PORT,
+
+        user=MYSQL_USER,
+
+        password=MYSQL_PASSWORD,
+
+        database=MYSQL_DATABASE
+    )
+
+
+# ---------------------------------------------------------
+# INITIALIZE DATABASE
+# ---------------------------------------------------------
 
 def init_db():
-    conn = connect()
+
+    server_connection = None
+    connection = None
+
     try:
-        conn.execute("""
+
+        # ---------------------------------------------
+        # Create database if it doesn't exist
+        # ---------------------------------------------
+
+        server_connection = connect_server()
+
+        cursor = server_connection.cursor()
+
+        cursor.execute(
+            f"""
+            CREATE DATABASE IF NOT EXISTS
+            `{MYSQL_DATABASE}`
+            CHARACTER SET utf8mb4
+            COLLATE utf8mb4_unicode_ci
+            """
+        )
+
+        server_connection.commit()
+
+        cursor.close()
+        server_connection.close()
+
+
+        # ---------------------------------------------
+        # Connect to application database
+        # ---------------------------------------------
+
+        connection = connect()
+
+        cursor = connection.cursor()
+
+
+        # ---------------------------------------------
+        # Create items table
+        # ---------------------------------------------
+
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS items (
-                id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-                type TEXT NOT NULL,
-                name TEXT NOT NULL,
-                category TEXT,
+
+                id INT AUTO_INCREMENT PRIMARY KEY,
+
+                type VARCHAR(20) NOT NULL,
+
+                name VARCHAR(255) NOT NULL,
+
+                category VARCHAR(100),
+
                 description TEXT,
-                location TEXT,
-                event_time TEXT,
-                image TEXT,
-                status TEXT DEFAULT 'searching',
-                created_at TEXT
+
+                location VARCHAR(255),
+
+                event_time VARCHAR(100),
+
+                image VARCHAR(500),
+
+                status VARCHAR(50)
+                    DEFAULT 'searching',
+
+                created_at DATETIME
+
             )
-        """) if using_postgres() else conn.execute("""
-            CREATE TABLE IF NOT EXISTS items (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type TEXT NOT NULL,
-                name TEXT NOT NULL,
-                category TEXT,
-                description TEXT,
-                location TEXT,
-                event_time TEXT,
-                image TEXT,
-                status TEXT DEFAULT 'searching',
-                created_at TEXT
-            )
-        """)
-        conn.commit()
+            """
+        )
+
+
+        connection.commit()
+
+        cursor.close()
+
+        connection.close()
+
+
+        print(
+            "MySQL database initialized successfully."
+        )
+
+
+    except Error as error:
+
+        print(
+            "MySQL initialization error:",
+            error
+        )
+
+        raise
+
+
     finally:
-        conn.close()
+
+        if server_connection:
+
+            try:
+                server_connection.close()
+            except Exception:
+                pass
+
+        if connection:
+
+            try:
+                connection.close()
+            except Exception:
+                pass
 
 
-def add_item(item_type, name, category, description, location, event_time, image):
-    conn = connect()
+# ---------------------------------------------------------
+# ADD ITEM
+# ---------------------------------------------------------
+
+def add_item(
+    item_type,
+    name,
+    category,
+    description,
+    location,
+    event_time,
+    image
+):
+
+    connection = None
+    cursor = None
+
     try:
-        conn.execute("""
-            INSERT INTO items
-            (type, name, category, description, location, event_time, image, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """ if using_postgres() else """
-            INSERT INTO items
-            (type, name, category, description, location, event_time, image, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            item_type, name, category, description, location, event_time, image,
-            datetime.now().strftime("%Y-%m-%d %H:%M")
-        ))
-        conn.commit()
-    finally:
-        conn.close()
 
+        connection = connect()
+
+        cursor = connection.cursor()
+
+
+        cursor.execute(
+            """
+            INSERT INTO items
+            (
+                type,
+                name,
+                category,
+                description,
+                location,
+                event_time,
+                image,
+                created_at
+            )
+
+            VALUES
+            (
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                NOW()
+            )
+            """,
+
+            (
+                item_type,
+                name,
+                category,
+                description,
+                location,
+                event_time,
+                image
+            )
+        )
+
+
+        connection.commit()
+
+
+        return cursor.lastrowid
+
+
+    finally:
+
+        if cursor:
+            cursor.close()
+
+        if connection:
+            connection.close()
+
+
+# ---------------------------------------------------------
+# GET ITEMS
+# ---------------------------------------------------------
 
 def get_items(item_type=None):
-    conn = connect()
-    try:
-        if item_type:
-            rows = conn.execute(
-                "SELECT * FROM items WHERE type=%s ORDER BY id DESC" if using_postgres() else
-                "SELECT * FROM items WHERE type=? ORDER BY id DESC", (item_type,)
-            ).fetchall()
-        else:
-            rows = conn.execute("SELECT * FROM items ORDER BY id DESC").fetchall()
-        return rows
-    finally:
-        conn.close()
 
+    connection = None
+    cursor = None
+
+    try:
+
+        connection = connect()
+
+        cursor = connection.cursor(
+            dictionary=True
+        )
+
+
+        if item_type:
+
+            cursor.execute(
+                """
+                SELECT *
+                FROM items
+                WHERE type = %s
+                ORDER BY id DESC
+                """,
+
+                (item_type,)
+            )
+
+        else:
+
+            cursor.execute(
+                """
+                SELECT *
+                FROM items
+                ORDER BY id DESC
+                """
+            )
+
+
+        return cursor.fetchall()
+
+
+    finally:
+
+        if cursor:
+            cursor.close()
+
+        if connection:
+            connection.close()
+
+
+# ---------------------------------------------------------
+# GET SINGLE ITEM
+# ---------------------------------------------------------
 
 def get_item(item_id):
-    conn = connect()
-    try:
-        return conn.execute(
-            "SELECT * FROM items WHERE id=%s" if using_postgres() else
-            "SELECT * FROM items WHERE id=?", (item_id,)
-        ).fetchone()
-    finally:
-        conn.close()
 
+    connection = None
+    cursor = None
 
-def update_status(item_id, status):
-    conn = connect()
     try:
-        conn.execute(
-            "UPDATE items SET status=%s WHERE id=%s" if using_postgres() else
-            "UPDATE items SET status=? WHERE id=?", (status, item_id)
+
+        connection = connect()
+
+        cursor = connection.cursor(
+            dictionary=True
         )
-        conn.commit()
+
+
+        cursor.execute(
+            """
+            SELECT *
+            FROM items
+            WHERE id = %s
+            """,
+
+            (item_id,)
+        )
+
+
+        return cursor.fetchone()
+
+
     finally:
-        conn.close()
+
+        if cursor:
+            cursor.close()
+
+        if connection:
+            connection.close()
+
+
+# ---------------------------------------------------------
+# UPDATE STATUS
+# ---------------------------------------------------------
+
+def update_status(
+    item_id,
+    status
+):
+
+    connection = None
+    cursor = None
+
+    try:
+
+        connection = connect()
+
+        cursor = connection.cursor()
+
+
+        cursor.execute(
+            """
+            UPDATE items
+
+            SET status = %s
+
+            WHERE id = %s
+            """,
+
+            (
+                status,
+                item_id
+            )
+        )
+
+
+        connection.commit()
+
+
+    finally:
+
+        if cursor:
+            cursor.close()
+
+        if connection:
+            connection.close()
