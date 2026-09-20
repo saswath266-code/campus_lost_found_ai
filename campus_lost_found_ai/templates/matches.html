@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<p class="eyebrow">AI MATCHING</p>
+<h1>Potential matches for {{ item['name'] }}</h1>
+<p>These are AI-generated recommendations. The college office must verify ownership before returning an item.</p>
+
+{% if not ai_status.enabled %}
+<div class="notice error">AI vision model is not available. Install the project requirements and download the OpenCLIP weights before using the hackathon demo.</div>
+{% endif %}
+
+{% for r in results %}
+<div class="match">
+  <div class="match-img">
+    {% if r.item['image'] %}<img src="{{ r.item['image'] }}" alt="{{ r.item['name'] }}">{% else %}<div class="placeholder">NO IMAGE</div>{% endif %}
+  </div>
+  <div class="match-info">
+    <div class="match-head"><div><span class="tag {{ r.item['type'] }}">{{ r.item['type']|upper }}</span><h2>{{ r.item['name'] }}</h2></div><strong>{{ r.overall }}%</strong></div>
+    <p>{{ r.item['description'] }}</p>
+    <p>📍 {{ r.item['location'] }} · 🕐 {{ r.item['event_time'] }}</p>
+    <div class="bars">
+      <span>AI Image <b>{{ r.image_score }}%</b></span>
+      <div class="bar"><i style="width: {{ r.image_score }}%"></i></div>
+      <span>AI Text <b>{{ r.text_score }}%</b></span>
+      <div class="bar"><i style="width: {{ r.text_score }}%"></i></div>
+      <span>Location <b>{{ r.location_score }}%</b></span>
+      <div class="bar"><i style="width: {{ r.location_score }}%"></i></div>
+      <span>Time <b>{{ r.time_score }}%</b></span>
+      <div class="bar"><i style="width: {{ r.time_score }}%"></i></div>
+    </div>
+    {% if r.overall >= 75 %}<div class="high">HIGH-POTENTIAL MATCH — send to office for verification</div>
+    {% elif r.overall >= 50 %}<div class="medium">POSSIBLE MATCH — review manually</div>
+    {% else %}<div class="low">LOW SIMILARITY</div>{% endif %}
+  </div>
+</div>
+{% else %}<div class="empty">No opposite-type reports exist yet.</div>{% endfor %}
+{% endblock %}

@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+campus.db
+static/uploads/*
+!static/uploads/.gitkeep
+*.log
+.DS_Store
+.vscode/
+.idea/

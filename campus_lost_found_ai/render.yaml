@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: campus-find-ai
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --workers 1 --threads 2 --timeout 180 app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: campus-find-db
+          property: connectionString
+      - key: AI_DEVICE
+        value: cpu
+      - key: CLIP_MODEL
+        value: ViT-B-32
+      - key: CLIP_PRETRAINED
+        value: laion2b_s34b_b79k
+      - key: AI_FALLBACK
+        value: "0"
+      - key: CLOUDINARY_URL
+        sync: false
+
+databases:
+  - name: campus-find-db
+    plan: starter

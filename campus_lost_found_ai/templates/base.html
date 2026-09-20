@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="CampusFind AI - AI-assisted campus lost and found matching">
+  <title>{% block title %}CampusFind AI{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<nav>
+  <a class="brand" href="{{ url_for('index') }}">CampusFind <span>AI</span></a>
+  <div class="navlinks">
+    <a href="{{ url_for('report_lost') }}">Report Lost</a>
+    <a href="{{ url_for('report_found') }}">Report Found</a>
+    {% if session.get('admin_logged_in') %}
+      <a href="{{ url_for('admin') }}">Office</a>
+      <a href="{{ url_for('admin_logout') }}">Logout</a>
+    {% else %}
+      <a href="{{ url_for('admin_login') }}">Office</a>
+    {% endif %}
+  </div>
+</nav>
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    <div class="flash-wrap">
+    {% for category, message in messages %}
+      <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+    </div>
+  {% endif %}
+{% endwith %}
+<main>{% block content %}{% endblock %}</main>
+<footer>CampusFind AI • Image + text + context matching • Human verification required</footer>
+</body>
+</html>

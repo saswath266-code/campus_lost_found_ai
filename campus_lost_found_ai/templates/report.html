@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="form-wrap">
+  <p class="eyebrow">{{ item_type|upper }} ITEM</p>
+  <h1>Report a {{ item_type }} item</h1>
+  <p>Both lost and found reports should include a photo and description. The AI compares both sides automatically.</p>
+
+  <form method="POST" enctype="multipart/form-data" class="form">
+    <label>Item name
+      <input name="name" required maxlength="120" placeholder="e.g. Black Nike backpack">
+    </label>
+
+    <label>Category
+      <select name="category">
+        <option>Bag</option><option>Mobile Phone</option><option>Laptop</option>
+        <option>Earphones</option><option>ID Card</option><option>Wallet</option>
+        <option>Keys</option><option>Book</option><option>Watch</option><option>Other</option>
+      </select>
+    </label>
+
+    <label>Detailed description
+      <textarea name="description" required maxlength="1000" placeholder="Color, brand, scratches, stickers, unique marks, case, etc."></textarea>
+    </label>
+
+    <label>Location
+      <input name="location" required maxlength="160" placeholder="Library, Block A, Canteen...">
+    </label>
+
+    <label>Date & time
+      <input type="datetime-local" name="event_time" required>
+    </label>
+
+    <label>Item image
+      <input type="file" name="image" accept="image/png,image/jpeg,image/webp">
+      <small>PNG/JPG/JPEG/WEBP · max {{ config.MAX_CONTENT_LENGTH // (1024*1024) }} MB</small>
+    </label>
+
+    <button class="btn primary" type="submit">Submit {{ item_type.title() }} Report</button>
+  </form>
+</div>
+{% endblock %}

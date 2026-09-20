@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<p class="eyebrow">COLLEGE OFFICE</p>
+<h1>Verification Dashboard</h1>
+<p>Review AI-generated matches before an item is returned.</p>
+
+<table>
+<thead><tr><th>Item</th><th>Type</th><th>Location</th><th>Status</th><th>Actions</th></tr></thead>
+<tbody>
+{% for item in items %}
+<tr>
+<td><strong>{{ item['name'] }}</strong><br><small>{{ (item['description'] or '')[:70] }}</small></td>
+<td><span class="tag {{ item['type'] }}">{{ item['type']|upper }}</span></td>
+<td>{{ item['location'] }}</td>
+<td>{{ item['status'] }}</td>
+<td class="actions-cell">
+  <a href="{{ url_for('matches', item_id=item['id']) }}">Matches</a>
+  <a href="{{ url_for('status', item_id=item['id'], status='under_review') }}">Review</a>
+  <a href="{{ url_for('status', item_id=item['id'], status='verified') }}">Verify</a>
+  <a href="{{ url_for('status', item_id=item['id'], status='returned') }}">Returned</a>
+  <a href="{{ url_for('status', item_id=item['id'], status='rejected') }}">Reject</a>
+</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

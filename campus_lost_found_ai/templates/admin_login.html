@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="form-wrap small-form">
+  <p class="eyebrow">COLLEGE OFFICE</p>
+  <h1>Admin Login</h1>
+  <p>Only authorized staff should use the verification dashboard.</p>
+  <form method="POST" class="form">
+    <label>Username<input name="username" autocomplete="username" required></label>
+    <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+    <button class="btn primary" type="submit">Sign in</button>
+  </form>
+</div>
+{% endblock %}
