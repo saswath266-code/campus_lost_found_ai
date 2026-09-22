@@ -9,7 +9,10 @@
 </head>
 <body>
 <nav>
-  <a class="brand" href="{{ url_for('index') }}">CampusFind <span>AI</span></a>
+  <a href="{{ url_for('index') }}" class="brand">
+    CampusFind <span>AI</span>
+    <small class="team-name">by TraceX</small>
+  </a>
   <div class="navlinks">
     <a href="{{ url_for('report_lost') }}">Report Lost</a>
     <a href="{{ url_for('report_found') }}">Report Found</a>
