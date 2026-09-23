@@ -422,6 +422,7 @@ def _call_gemini(item: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
             ),
         )
     except Exception as exc:
+        LOGGER.exception("Gemini API call failed")
         raise GeminiUnavailable("Gemini could not complete this comparison.") from exc
     return _normalise_assessment(_response_to_payload(response))
 
