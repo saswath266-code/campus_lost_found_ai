@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block title %}Service Unavailable | CampusFind AI{% endblock %}
+{% block content %}
+<section class="error-page"><p class="eyebrow">SERVICE CHECK</p><h1>CampusFind needs its database.</h1><p>MySQL is currently unavailable, so reports cannot be safely read or changed. Confirm the service and environment settings, then reload this page.</p><a class="btn primary" href="{{ url_for('index') }}">Try again</a></section>
+{% endblock %}

@@ -1,12 +1,25 @@
+# Python environments and generated code
 __pycache__/
 *.py[cod]
 .venv/
 venv/
+.pytest_cache/
+.coverage
+
+# Secrets and local configuration
 .env
-campus.db
+.env.*
+!.env.example
+*.pem
+
+# Runtime files
 static/uploads/*
 !static/uploads/.gitkeep
 *.log
-.DS_Store
+CampusFind_AI_Optimized.zip
+
+# Editor and OS files
 .vscode/
 .idea/
+.DS_Store
+Thumbs.db

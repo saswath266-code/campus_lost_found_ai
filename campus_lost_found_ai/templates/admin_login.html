@@ -1,13 +1,21 @@
 {% extends "base.html" %}
+{% block title %}Office Sign In | CampusFind AI{% endblock %}
 {% block content %}
-<div class="form-wrap small-form">
-  <p class="eyebrow">COLLEGE OFFICE</p>
-  <h1>Admin Login</h1>
-  <p>Only authorized staff should use the verification dashboard.</p>
-  <form method="POST" class="form">
-    <label>Username<input name="username" autocomplete="username" required></label>
-    <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
-    <button class="btn primary" type="submit">Sign in</button>
-  </form>
+<div class="login-wrap">
+  <section class="login-copy">
+    <p class="eyebrow">CAMPUS OFFICE</p>
+    <h1>Protect every return.</h1>
+    <p>Staff use this dashboard to inspect AI evidence, review potential pairings, and update item progress. AI recommendations never replace ownership checks.</p>
+  </section>
+  <section class="form-panel small-form">
+    <h2>Office sign in</h2>
+    <form method="post" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="next" value="{{ next_url or '' }}">
+      <label>Username<input name="username" autocomplete="username" required></label>
+      <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="btn primary full" type="submit">Sign in securely</button>
+    </form>
+  </section>
 </div>
 {% endblock %}

@@ -1,41 +1,45 @@
 {% extends "base.html" %}
+{% block title %}Report {{ item_type|title }} Item | CampusFind AI{% endblock %}
 {% block content %}
-<div class="form-wrap">
-  <p class="eyebrow">{{ item_type|upper }} ITEM</p>
-  <h1>Report a {{ item_type }} item</h1>
-  <p>Both lost and found reports should include a photo and description. The AI compares both sides automatically.</p>
-
-  <form method="POST" enctype="multipart/form-data" class="form">
-    <label>Item name
-      <input name="name" required maxlength="120" placeholder="e.g. Black Nike backpack">
-    </label>
-
-    <label>Category
-      <select name="category">
-        <option>Bag</option><option>Mobile Phone</option><option>Laptop</option>
-        <option>Earphones</option><option>ID Card</option><option>Wallet</option>
-        <option>Keys</option><option>Book</option><option>Watch</option><option>Other</option>
-      </select>
-    </label>
-
-    <label>Detailed description
-      <textarea name="description" required maxlength="1000" placeholder="Color, brand, scratches, stickers, unique marks, case, etc."></textarea>
-    </label>
-
-    <label>Location
-      <input name="location" required maxlength="160" placeholder="Library, Block A, Canteen...">
-    </label>
-
-    <label>Date & time
-      <input type="datetime-local" name="event_time" required>
-    </label>
-
-    <label>Item image
-      <input type="file" name="image" accept="image/png,image/jpeg,image/webp">
-      <small>PNG/JPG/JPEG/WEBP · max {{ config.MAX_CONTENT_LENGTH // (1024*1024) }} MB</small>
-    </label>
-
-    <button class="btn primary" type="submit">Submit {{ item_type.title() }} Report</button>
-  </form>
+<div class="form-layout">
+  <section class="form-intro">
+    <p class="eyebrow">{{ item_type|upper }} ITEM REPORT</p>
+    <h1>Give the office a useful lead.</h1>
+    <p>Be specific about color, brand/model, case, stickers, scratches, damage, or anything else another person could recognize. A photo helps Gemini compare visible evidence, but it never proves ownership.</p>
+    <div class="tip-card"><strong>Privacy tip</strong><br>Do not include passwords, full ID numbers, addresses, or other sensitive personal information.</div>
+  </section>
+  <section class="form-panel">
+    <h2>Report a {{ item_type }} item</h2>
+    <form method="post" enctype="multipart/form-data" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field-grid">
+        <label>Item name
+          <input name="name" required maxlength="120" placeholder="e.g. Black Nike backpack" autocomplete="off">
+        </label>
+        <label>Category
+          <select name="category">
+            {% for category in categories %}<option value="{{ category }}">{{ category }}</option>{% endfor %}
+          </select>
+        </label>
+      </div>
+      <label>Detailed description
+        <textarea name="description" required maxlength="1000" placeholder="Color, brand, model, scratches, stickers, case, or distinctive marks"></textarea>
+        <small>Up to 1,000 characters. Describe observable details rather than private information.</small>
+      </label>
+      <div class="field-grid">
+        <label>Location
+          <input name="location" required maxlength="160" placeholder="Library, Block A, canteen...">
+        </label>
+        <label>Date and time
+          <input type="datetime-local" name="event_time" required>
+        </label>
+      </div>
+      <label>Item image <span class="optional">optional, recommended</span>
+        <input type="file" name="image" accept="image/png,image/jpeg,image/webp">
+        <small>PNG, JPG, JPEG, or WEBP only. Files are validated before storage; maximum {{ config.MAX_CONTENT_LENGTH // (1024 * 1024) }} MB.</small>
+      </label>
+      <button class="btn primary full" type="submit">Submit {{ item_type }} report</button>
+    </form>
+  </section>
 </div>
 {% endblock %}

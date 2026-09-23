@@ -1,27 +1,41 @@
 {% extends "base.html" %}
+{% block title %}Office Dashboard | CampusFind AI{% endblock %}
 {% block content %}
-<p class="eyebrow">COLLEGE OFFICE</p>
-<h1>Verification Dashboard</h1>
-<p>Review AI-generated matches before an item is returned.</p>
+<section class="dashboard-heading">
+  <div><p class="eyebrow">CAMPUS OFFICE</p><h1>Verification dashboard</h1><p>Review reports, inspect potential matches, and progress an item only after the appropriate real-world checks.</p></div>
+  <a class="btn secondary" href="{{ url_for('index') }}">View public reports</a>
+</section>
 
-<table>
-<thead><tr><th>Item</th><th>Type</th><th>Location</th><th>Status</th><th>Actions</th></tr></thead>
-<tbody>
-{% for item in items %}
-<tr>
-<td><strong>{{ item['name'] }}</strong><br><small>{{ (item['description'] or '')[:70] }}</small></td>
-<td><span class="tag {{ item['type'] }}">{{ item['type']|upper }}</span></td>
-<td>{{ item['location'] }}</td>
-<td>{{ item['status'] }}</td>
-<td class="actions-cell">
-  <a href="{{ url_for('matches', item_id=item['id']) }}">Matches</a>
-  <a href="{{ url_for('status', item_id=item['id'], status='under_review') }}">Review</a>
-  <a href="{{ url_for('status', item_id=item['id'], status='verified') }}">Verify</a>
-  <a href="{{ url_for('status', item_id=item['id'], status='returned') }}">Returned</a>
-  <a href="{{ url_for('status', item_id=item['id'], status='rejected') }}">Reject</a>
-</td>
-</tr>
-{% endfor %}
-</tbody>
-</table>
+<form class="filters admin-filters" method="get" action="{{ url_for('admin') }}">
+  <label class="sr-only" for="admin-search">Search reports</label><input id="admin-search" name="q" value="{{ query }}" maxlength="80" placeholder="Search reports">
+  <select name="type"><option value="">Lost and found</option>{% for item_type in ['lost', 'found'] %}<option value="{{ item_type }}" {% if selected_type == item_type %}selected{% endif %}>{{ item_type|title }}</option>{% endfor %}</select>
+  <select name="status"><option value="">All statuses</option>{% for item_status in item_statuses %}<option value="{{ item_status }}" {% if selected_status == item_status %}selected{% endif %}>{{ item_status|replace('_', ' ')|title }}</option>{% endfor %}</select>
+  <button class="btn tertiary" type="submit">Filter</button>
+</form>
+
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Report</th><th>Type</th><th>Location / time</th><th>Progress</th><th>Office actions</th></tr></thead>
+    <tbody>
+      {% for item in items %}
+        <tr>
+          <td data-label="Report"><strong>{{ item.name }}</strong><br><small>{{ (item.description or '')[:100] }}{% if (item.description or '')|length > 100 %}&hellip;{% endif %}</small></td>
+          <td data-label="Type"><span class="tag {{ item.type }}">{{ item.type }}</span></td>
+          <td data-label="Location / time">{{ item.location }}<br><small>{{ item.event_time|event_time }}</small></td>
+          <td data-label="Progress"><span class="status status-{{ item.status }}">{{ item.status|replace('_', ' ') }}</span></td>
+          <td data-label="Office actions" class="actions-cell">
+            <a class="text-button" href="{{ url_for('matches', item_id=item.id) }}">Inspect matches</a>
+            <form method="post" action="{{ url_for('status', item_id=item.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <select name="status" aria-label="Status for {{ item.name }}">{% for item_status in item_statuses %}<option value="{{ item_status }}" {% if item.status == item_status %}selected{% endif %}>{{ item_status|replace('_', ' ')|title }}</option>{% endfor %}</select>
+              <button class="text-button" type="submit">Save</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="no-results">No reports match these filters.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endblock %}

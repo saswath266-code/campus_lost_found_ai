@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block title %}{{ code }} | CampusFind AI{% endblock %}
+{% block content %}
+<section class="error-page"><p class="eyebrow">ERROR {{ code }}</p><h1>That page needs another look.</h1><p>{{ message }}</p><a class="btn primary" href="{{ url_for('index') }}">Return home</a></section>
+{% endblock %}

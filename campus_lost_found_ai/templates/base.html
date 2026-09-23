@@ -3,37 +3,46 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="CampusFind AI - AI-assisted campus lost and found matching">
+  <meta name="description" content="CampusFind AI - evidence-led campus lost and found">
   <title>{% block title %}CampusFind AI{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-<nav>
-  <a href="{{ url_for('index') }}" class="brand">
-    CampusFind <span>AI</span>
-    <small class="team-name">by TraceX</small>
-  </a>
-  <div class="navlinks">
-    <a href="{{ url_for('report_lost') }}">Report Lost</a>
-    <a href="{{ url_for('report_found') }}">Report Found</a>
-    {% if session.get('admin_logged_in') %}
-      <a href="{{ url_for('admin') }}">Office</a>
-      <a href="{{ url_for('admin_logout') }}">Logout</a>
-    {% else %}
-      <a href="{{ url_for('admin') }}">Office</a>
-    {% endif %}
-  </div>
-</nav>
-{% with messages = get_flashed_messages(with_categories=true) %}
-  {% if messages %}
-    <div class="flash-wrap">
-    {% for category, message in messages %}
-      <div class="flash {{ category }}">{{ message }}</div>
-    {% endfor %}
+  <nav class="site-nav" aria-label="Primary navigation">
+    <a href="{{ url_for('index') }}" class="brand" aria-label="CampusFind AI home">
+      <span class="brand-mark" aria-hidden="true">C</span>
+      <span>CampusFind <b>AI</b><small>by TraceX</small></span>
+    </a>
+    <div class="navlinks">
+      <a href="{{ url_for('report_lost') }}">Report lost</a>
+      <a href="{{ url_for('report_found') }}">Report found</a>
+      {% if session.get('admin_logged_in') %}
+        <a href="{{ url_for('admin') }}">Office</a>
+        <form method="post" action="{{ url_for('admin_logout') }}" class="nav-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="nav-button">Sign out</button>
+        </form>
+      {% else %}
+        <a href="{{ url_for('admin') }}">Office</a>
+      {% endif %}
     </div>
-  {% endif %}
-{% endwith %}
-<main>{% block content %}{% endblock %}</main>
-<footer>CampusFind AI • Image + text + context matching • Human verification required</footer>
+  </nav>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flash-wrap" aria-live="polite">
+        {% for category, message in messages %}
+          <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  <main>{% block content %}{% endblock %}</main>
+  <footer>
+    <span>CampusFind AI</span><span aria-hidden="true">&middot;</span>
+    Image + report-context evidence<span aria-hidden="true">&middot;</span>
+    Human verification required
+  </footer>
 </body>
 </html>

@@ -1,55 +1,93 @@
 {% extends "base.html" %}
 {% block content %}
+{% if not database_available %}
+  <div class="notice error"><strong>Database unavailable.</strong> Reports cannot be loaded until MySQL is connected. See the setup guide before the demo.</div>
+{% endif %}
+
 <section class="hero">
-  <div>
-    <p class="eyebrow">HACM121 · SMART CAMPUS RECOVERY</p>
-    <h1>Lost something?<br><span>Let AI find the match.</span></h1>
-    <p>Report lost and found items from any device. CampusFind AI compares item images and descriptions, then uses location and time as supporting context.</p>
+  <div class="hero-copy">
+    <p class="eyebrow">HACM121 &middot; SMART CAMPUS RECOVERY</p>
+    <h1>Lost something?<br><span>Start the way back.</span></h1>
+    <p class="lede">CampusFind AI pairs lost and found reports using report details, location, timing, and optional Gemini visual evidence. Every return is verified by the campus office.</p>
     <div class="actions">
-      <a class="btn primary" href="{{ url_for('report_lost') }}">I Lost Something</a>
-      <a class="btn secondary" href="{{ url_for('report_found') }}">I Found Something</a>
+      <a class="btn primary" href="{{ url_for('report_lost') }}">I lost something</a>
+      <a class="btn secondary" href="{{ url_for('report_found') }}">I found something</a>
     </div>
     <div class="status-chip {% if ai_status.enabled %}ok{% else %}warn{% endif %}">
-      {% if ai_status.enabled %}● AI vision online — {{ ai_status.model }}{% else %}● AI model not loaded{% endif %}
+      <span aria-hidden="true">&#9679;</span>
+      {% if ai_status.enabled %}Gemini visual evidence ready{% else %}Context screening only{% endif %}
     </div>
   </div>
-  <div class="hero-card">
-    <div class="orb">AI</div>
-    <h3>Multimodal Matching</h3>
-    <p>55% image · 25% text · 10% location · 10% time</p>
-    <div class="mini-flow"><span>📷</span><b>→</b><span>🧠</span><b>→</b><span>🎯</span></div>
+  <aside class="hero-card" aria-label="How CampusFind works">
+    <div class="orb" aria-hidden="true">AI</div>
+    <p class="eyebrow">A CAREFUL MATCH, NOT A CLAIM</p>
+    <h2>Evidence first.</h2>
+    <ol class="flow-list">
+      <li><span>1</span> Report the item and its details.</li>
+      <li><span>2</span> Compare photos and context.</li>
+      <li><span>3</span> Let the office verify ownership.</li>
+    </ol>
+  </aside>
+</section>
+
+<section class="browse-section" aria-labelledby="browse-title">
+  <div class="section-heading">
+    <div>
+      <p class="eyebrow">REPORTS</p>
+      <h2 id="browse-title">Browse recent reports</h2>
+    </div>
+    <p>Search both lost and found reports by object, brand, description, or place.</p>
+  </div>
+  <form class="filters" method="get" action="{{ url_for('index') }}">
+    <label class="sr-only" for="search">Search reports</label>
+    <input id="search" name="q" value="{{ query }}" maxlength="80" placeholder="Search backpack, Samsung, library...">
+    <label class="sr-only" for="category">Category</label>
+    <select id="category" name="category">
+      <option value="">All categories</option>
+      {% for category in categories %}<option value="{{ category }}" {% if selected_category == category %}selected{% endif %}>{{ category }}</option>{% endfor %}
+    </select>
+    <button class="btn tertiary" type="submit">Search</button>
+    {% if query or selected_category %}<a class="clear-link" href="{{ url_for('index') }}">Clear</a>{% endif %}
+  </form>
+</section>
+
+<section class="reports-section" aria-labelledby="lost-title">
+  <div class="report-heading"><h2 id="lost-title">Lost reports</h2><a href="{{ url_for('report_lost') }}">Add a lost report &rarr;</a></div>
+  <div class="grid">
+    {% for item in lost %}
+      <article class="card">
+        {% if item.image %}<img src="{{ item.image }}" alt="Reported image of {{ item.name }}">{% else %}<div class="placeholder">No photo provided</div>{% endif %}
+        <div class="cardbody">
+          <div class="tag-row"><span class="tag lost">Lost</span><span class="status status-{{ item.status }}">{{ item.status|replace('_', ' ') }}</span></div>
+          <h3>{{ item.name }}</h3>
+          <p>{{ item.description }}</p>
+          <dl class="meta"><div><dt>Location</dt><dd>{{ item.location }}</dd></div><div><dt>When</dt><dd>{{ item.event_time|event_time }}</dd></div></dl>
+          <a class="link" href="{{ url_for('matches', item_id=item.id) }}">Review potential matches <span aria-hidden="true">&rarr;</span></a>
+        </div>
+      </article>
+    {% else %}
+      <div class="empty">No lost reports match these filters yet.</div>
+    {% endfor %}
   </div>
 </section>
 
-<h2>Recently Reported Lost Items</h2>
-<div class="grid">
-{% for item in lost %}
-<div class="card">
-  {% if item['image'] %}<img src="{{ item['image'] }}" alt="{{ item['name'] }}">{% else %}<div class="placeholder">NO IMAGE</div>{% endif %}
-  <div class="cardbody">
-    <span class="tag lost">LOST</span>
-    <h3>{{ item['name'] }}</h3>
-    <p>{{ item['description'] }}</p>
-    <small>📍 {{ item['location'] }} · 🕐 {{ item['event_time'] }}</small>
-    <a class="link" href="{{ url_for('matches', item_id=item['id']) }}">Find potential matches →</a>
+<section class="reports-section" aria-labelledby="found-title">
+  <div class="report-heading"><h2 id="found-title">Found reports</h2><a href="{{ url_for('report_found') }}">Add a found report &rarr;</a></div>
+  <div class="grid">
+    {% for item in found %}
+      <article class="card">
+        {% if item.image %}<img src="{{ item.image }}" alt="Reported image of {{ item.name }}">{% else %}<div class="placeholder">No photo provided</div>{% endif %}
+        <div class="cardbody">
+          <div class="tag-row"><span class="tag found">Found</span><span class="status status-{{ item.status }}">{{ item.status|replace('_', ' ') }}</span></div>
+          <h3>{{ item.name }}</h3>
+          <p>{{ item.description }}</p>
+          <dl class="meta"><div><dt>Location</dt><dd>{{ item.location }}</dd></div><div><dt>When</dt><dd>{{ item.event_time|event_time }}</dd></div></dl>
+          <a class="link" href="{{ url_for('matches', item_id=item.id) }}">Review potential matches <span aria-hidden="true">&rarr;</span></a>
+        </div>
+      </article>
+    {% else %}
+      <div class="empty">No found reports match these filters yet.</div>
+    {% endfor %}
   </div>
-</div>
-{% else %}<p>No lost reports yet.</p>{% endfor %}
-</div>
-
-<h2>Recently Found Items</h2>
-<div class="grid">
-{% for item in found %}
-<div class="card">
-  {% if item['image'] %}<img src="{{ item['image'] }}" alt="{{ item['name'] }}">{% else %}<div class="placeholder">NO IMAGE</div>{% endif %}
-  <div class="cardbody">
-    <span class="tag found">FOUND</span>
-    <h3>{{ item['name'] }}</h3>
-    <p>{{ item['description'] }}</p>
-    <small>📍 {{ item['location'] }} · 🕐 {{ item['event_time'] }}</small>
-    <a class="link" href="{{ url_for('matches', item_id=item['id']) }}">Find potential claimants →</a>
-  </div>
-</div>
-{% else %}<p>No found reports yet.</p>{% endfor %}
-</div>
+</section>
 {% endblock %}

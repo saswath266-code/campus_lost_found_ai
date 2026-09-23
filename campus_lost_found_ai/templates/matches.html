@@ -1,36 +1,81 @@
 {% extends "base.html" %}
+{% block title %}Potential Matches | CampusFind AI{% endblock %}
 {% block content %}
-<p class="eyebrow">AI MATCHING</p>
-<h1>Potential matches for {{ item['name'] }}</h1>
-<p>These are AI-generated recommendations. The college office must verify ownership before returning an item.</p>
+<section class="match-hero">
+  <div>
+    <p class="eyebrow">POTENTIAL MATCHES</p>
+    <h1>Leads for <span>{{ item.name }}</span></h1>
+    <p>These comparisons help the office decide what to inspect. A lead is never proof that two reports describe the same object or that a person owns it.</p>
+  </div>
+  <aside class="source-card">
+    <span class="tag {{ item.type }}">{{ item.type }}</span>
+    <strong>{{ item.name }}</strong>
+    <small>{{ item.category }} &middot; {{ item.location }}</small>
+    <span class="status status-{{ item.status }}">{{ item.status|replace('_', ' ') }}</span>
+  </aside>
+</section>
 
 {% if not ai_status.enabled %}
-<div class="notice error">AI vision model is not available. Install the project requirements and download the OpenCLIP weights before using the hackathon demo.</div>
+  <div class="notice warn"><strong>Visual AI is unavailable.</strong> {{ ai_status.message }} The context summaries below use report text, location, and time only.</div>
 {% endif %}
 
 {% for r in results %}
-<div class="match">
-  <div class="match-img">
-    {% if r.item['image'] %}<img src="{{ r.item['image'] }}" alt="{{ r.item['name'] }}">{% else %}<div class="placeholder">NO IMAGE</div>{% endif %}
-  </div>
-  <div class="match-info">
-    <div class="match-head"><div><span class="tag {{ r.item['type'] }}">{{ r.item['type']|upper }}</span><h2>{{ r.item['name'] }}</h2></div><strong>{{ r.overall }}%</strong></div>
-    <p>{{ r.item['description'] }}</p>
-    <p>📍 {{ r.item['location'] }} · 🕐 {{ r.item['event_time'] }}</p>
-    <div class="bars">
-      <span>AI Image <b>{{ r.image_score }}%</b></span>
-      <div class="bar"><i style="width: {{ r.image_score }}%"></i></div>
-      <span>AI Text <b>{{ r.text_score }}%</b></span>
-      <div class="bar"><i style="width: {{ r.text_score }}%"></i></div>
-      <span>Location <b>{{ r.location_score }}%</b></span>
-      <div class="bar"><i style="width: {{ r.location_score }}%"></i></div>
-      <span>Time <b>{{ r.time_score }}%</b></span>
-      <div class="bar"><i style="width: {{ r.time_score }}%"></i></div>
+  <article class="match">
+    <div class="match-img">
+      {% if r.item.image %}<img src="{{ r.item.image }}" alt="Reported image of {{ r.item.name }}">{% else %}<div class="placeholder">No photo provided</div>{% endif %}
     </div>
-    {% if r.overall >= 75 %}<div class="high">HIGH-POTENTIAL MATCH — send to office for verification</div>
-    {% elif r.overall >= 50 %}<div class="medium">POSSIBLE MATCH — review manually</div>
-    {% else %}<div class="low">LOW SIMILARITY</div>{% endif %}
-  </div>
-</div>
-{% else %}<div class="empty">No opposite-type reports exist yet.</div>{% endfor %}
+    <div class="match-info">
+      <div class="match-head">
+        <div>
+          <div class="tag-row"><span class="tag {{ r.item.type }}">{{ r.item.type }}</span><span class="status status-{{ r.item.status }}">{{ r.item.status|replace('_', ' ') }}</span></div>
+          <h2>{{ r.item.name }}</h2>
+          <p>{{ r.item.description }}</p>
+        </div>
+        {% if r.analysis_mode == 'gemini' %}
+          <div class="confidence"><strong>{{ r.evidence_confidence }}%</strong><span>evidence confidence</span></div>
+        {% else %}
+          <div class="context-label">Manual<br>screening</div>
+        {% endif %}
+      </div>
+
+      <div class="match-callout {{ r.analysis_mode }}">
+        <strong>{% if r.analysis_mode == 'gemini' %}{{ r.match_likelihood|replace('_', ' ')|title }}{% else %}Context screening only{% endif %}</strong>
+        <span>{{ r.analysis_message }}</span>
+      </div>
+
+      {% if r.assessment %}
+        <p class="summary">{{ r.assessment.summary }}</p>
+        <div class="evidence-grid">
+          <section><h3>Visible evidence</h3><ul>{% for note in r.assessment.visual_evidence %}<li>{{ note }}</li>{% else %}<li>No reliable visible similarity was identified.</li>{% endfor %}</ul></section>
+          <section><h3>Distinctive details</h3><ul>{% for note in r.assessment.distinctive_features %}<li>{{ note }}</li>{% else %}<li>No distinctive physical feature was confirmed.</li>{% endfor %}</ul></section>
+          <section><h3>Description evidence</h3><ul>{% for note in r.assessment.description_evidence %}<li>{{ note }}</li>{% else %}<li>The reports do not provide a clear descriptive connection.</li>{% endfor %}</ul></section>
+          <section><h3>Still needed</h3><ul>{% for note in r.assessment.missing_evidence %}<li>{{ note }}</li>{% else %}<li>Office inspection and ownership verification are still required.</li>{% endfor %}</ul></section>
+        </div>
+      {% endif %}
+
+      <div class="signal-grid" aria-label="Transparent comparison signals">
+        {% if r.visual_score is not none %}<div><span>Gemini visual evidence</span><b>{{ r.visual_score }}%</b></div>{% endif %}
+        <div><span>Category</span><b>{{ r.scores.category_score }}%</b></div>
+        <div><span>Report detail overlap</span><b>{{ r.scores.description_score }}%</b></div>
+        <div><span>Location compatibility</span><b>{{ r.scores.location_score }}%</b></div>
+        <div><span>Time proximity</span><b>{{ r.scores.time_score }}%</b></div>
+      </div>
+      <details class="context-details"><summary>Why the context scores look this way</summary><ul>{% for detail in r.scores.details %}<li>{{ detail }}</li>{% endfor %}</ul></details>
+
+      {% if session.get('admin_logged_in') and r.review_id %}
+        <div class="review-tools">
+          <span>Office decision: <b>{{ r.decision|replace('_', ' ') }}</b></span>
+          <form method="post" action="{{ url_for('match_decision', review_id=r.review_id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="text-button" name="decision" value="under_review" type="submit">Mark under review</button>
+            <button class="text-button success" name="decision" value="verified" type="submit">Verify lead</button>
+            <button class="text-button danger" name="decision" value="rejected" type="submit">Reject lead</button>
+          </form>
+        </div>
+      {% endif %}
+    </div>
+  </article>
+{% else %}
+  <div class="empty"><h2>No opposite-type reports yet</h2><p>When another report is added, it will appear here for careful review.</p></div>
+{% endfor %}
 {% endblock %}
