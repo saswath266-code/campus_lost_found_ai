@@ -1,6 +1,6 @@
-"""Evidence-based Gemini multimodal matching for CampusFind AI.
+"""Evidence-based OpenRouter multimodal matching for CampusFind AI.
 
-Gemini is asked to compare the two report photos and report its observations in
+OpenRouter is asked to compare the two report photos and report its observations in
 a constrained JSON shape. The displayed confidence is calculated from that
 visual evidence plus transparent, deterministic report context; it is a triage
 aid for the office, never proof of ownership.
@@ -25,21 +25,18 @@ from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
 from PIL import Image, UnidentifiedImageError
-
 from database import get_items, get_match_review, save_match_review
 
-try:  # Allows a helpful runtime message before dependencies are installed.
-    from google import genai
-    from google.genai import types
-except ImportError:  # pragma: no cover - exercised on a new teammate machine
-    genai = None
-    types = None
-
+import base64
+import requests
+types = None
 load_dotenv()
 
 LOGGER = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free")
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 STOP_WORDS = {
     "a", "an", "and", "at", "for", "from", "in", "is", "it", "of", "on", "or",
@@ -98,47 +95,55 @@ class MatchingError(RuntimeError):
 
 
 class GeminiUnavailable(MatchingError):
-    """Gemini cannot be used for this comparison."""
+    """OpenRouter cannot be used for this comparison."""
 
 
 class MalformedGeminiResponse(MatchingError):
-    """Gemini returned content that cannot safely be shown as evidence."""
+    """OpenRouter returned content that cannot safely be shown as evidence."""
 
 
 class ImageEvidenceError(MatchingError):
     """A stored image is missing, too large, unsafe, or unreadable."""
 
 
+def _openrouter_configured() -> bool:
+    return bool(OPENROUTER_API_KEY)
 def _configured_client():
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        return None
-    if genai is None:
-        return None
-    return genai.Client(api_key=api_key)
+    """Compatibility helper used by the existing test suite.
 
+    OpenRouter does not require a client object, so a simple sentinel object
+    is returned when the API is configured.
+    """
+    if not _openrouter_configured():
+        return None
+    return object()
 
 def ai_status() -> dict[str, Any]:
     """Return public-safe AI availability without exposing configuration details."""
 
-    enabled = bool(os.getenv("GEMINI_API_KEY", "").strip()) and genai is not None
+    enabled = _openrouter_configured()
+
     return {
         "enabled": enabled,
-        "model": GEMINI_MODEL,
-        "provider": "Google Gemini API",
-        "message": "Gemini visual evidence is ready." if enabled else "Gemini is not configured; context screening remains available.",
+        "model": OPENROUTER_MODEL,
+        "provider": "OpenRouter",
+        "message": (
+            "OpenRouter visual evidence is ready."
+            if enabled
+            else "OpenRouter is not configured; context screening remains available."
+        ),
     }
 
 
 def _bounded_int(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise MalformedGeminiResponse("Gemini did not provide a numeric visual assessment.")
+        raise MalformedGeminiResponse("OpenRouter did not provide a numeric visual assessment.")
     return max(0, min(100, round(value)))
 
 
 def _short_text_list(value: Any, field_name: str) -> list[str]:
     if not isinstance(value, list):
-        raise MalformedGeminiResponse(f"Gemini returned an invalid {field_name} field.")
+        raise MalformedGeminiResponse(f"OpenRouter returned an invalid {field_name} field.")
     clean: list[str] = []
     for entry in value[:5]:
         if not isinstance(entry, str):
@@ -153,7 +158,7 @@ def _normalise_assessment(payload: Any) -> dict[str, Any]:
     """Validate all model output before it is stored or rendered."""
 
     if not isinstance(payload, dict):
-        raise MalformedGeminiResponse("Gemini did not return a JSON object.")
+        raise MalformedGeminiResponse("OpenRouter did not return a JSON object.")
 
     allowed = {
         "category_compatibility": {"compatible", "unclear", "incompatible"},
@@ -165,7 +170,7 @@ def _normalise_assessment(payload: Any) -> dict[str, Any]:
     for field, values in allowed.items():
         value = payload.get(field)
         if value not in values:
-            raise MalformedGeminiResponse(f"Gemini returned an invalid {field} field.")
+            raise MalformedGeminiResponse(f"OpenRouter returned an invalid {field} field.")
         normalised[field] = value
 
     for field in ("visual_evidence", "description_evidence", "distinctive_features", "missing_evidence"):
@@ -173,7 +178,7 @@ def _normalise_assessment(payload: Any) -> dict[str, Any]:
 
     summary = payload.get("summary")
     if not isinstance(summary, str) or not summary.strip():
-        raise MalformedGeminiResponse("Gemini did not provide a usable evidence summary.")
+        raise MalformedGeminiResponse("OpenRouter did not provide a usable evidence summary.")
     normalised["summary"] = " ".join(summary.split())[:500]
     return normalised
 
@@ -185,14 +190,14 @@ def _response_to_payload(response: Any) -> dict[str, Any]:
 
     raw_text = getattr(response, "text", "")
     if not isinstance(raw_text, str) or not raw_text.strip():
-        raise MalformedGeminiResponse("Gemini returned no JSON evidence.")
+        raise MalformedGeminiResponse("OpenRouter returned no JSON evidence.")
     raw_text = raw_text.strip()
     if raw_text.startswith("```"):
         raw_text = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_text, flags=re.IGNORECASE)
     try:
         return json.loads(raw_text)
     except json.JSONDecodeError as exc:
-        raise MalformedGeminiResponse("Gemini returned malformed JSON evidence.") from exc
+        raise MalformedGeminiResponse("OpenRouter returned malformed JSON evidence.") from exc
 
 
 def _image_mime_and_bytes(data: bytes, hint: str = "") -> tuple[bytes, str]:
@@ -389,43 +394,136 @@ def _safe_report_data(item: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def _call_gemini(item: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
-    client = _configured_client()
-    if client is None or types is None:
-        raise GeminiUnavailable("Gemini is not configured.")
+def _call_openrouter(item: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+    if not _openrouter_configured():
+        raise GeminiUnavailable("OpenRouter is not configured.")
 
     first_image, first_mime = _read_image_bytes(str(item.get("image") or ""))
     second_image, second_mime = _read_image_bytes(str(candidate.get("image") or ""))
+
+    first_image_b64 = base64.b64encode(first_image).decode("utf-8")
+    second_image_b64 = base64.b64encode(second_image).decode("utf-8")
+
+    first_image_url = f"data:{first_mime};base64,{first_image_b64}"
+    second_image_url = f"data:{second_mime};base64,{second_image_b64}"
+
     prompt = (
-        "You support a campus lost-and-found office. Compare Report A and Report B and their photos. "
-        "Assess object/category compatibility; visible appearance, color, shape, brand or model when actually visible; "
-        "and distinctive physical characteristics such as stickers, cases, scratches, damage, or missing parts. "
-        "Compare the supplied report descriptions and treat location and time only as supporting context. "
-        "Do not infer ownership, identity, or facts not visible/supplied. Never say the objects are definitely the same. "
-        "When photos are unclear or evidence conflicts, state that plainly and lower visual_similarity. "
+        "You support a campus lost-and-found office. "
+        "Compare Report A and Report B and their photos. "
+        "Assess object/category compatibility; visible appearance, color, shape, "
+        "brand or model when actually visible; and distinctive physical "
+        "characteristics such as stickers, cases, scratches, damage, or missing parts. "
+        "Compare the supplied report descriptions and treat location and time only "
+        "as supporting context. "
+        "Do not infer ownership, identity, or facts not visible or supplied. "
+        "Never say the objects are definitely the same. "
+        "When photos are unclear or evidence conflicts, state that plainly and "
+        "lower visual_similarity. "
         f"Report A: {json.dumps(_safe_report_data(item), ensure_ascii=False)}\n"
         f"Report B: {json.dumps(_safe_report_data(candidate), ensure_ascii=False)}\n"
         "The first supplied image is Report A and the second is Report B."
     )
-    try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[
-                prompt,
-                types.Part.from_bytes(data=first_image, mime_type=first_mime),
-                types.Part.from_bytes(data=second_image, mime_type=second_mime),
-            ],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_json_schema=ASSESSMENT_SCHEMA,
-                temperature=0.1,
-            ),
-        )
-    except Exception as exc:
-        LOGGER.exception("Gemini API call failed")
-        raise GeminiUnavailable("Gemini could not complete this comparison.") from exc
-    return _normalise_assessment(_response_to_payload(response))
 
+    payload = {
+        "model": OPENROUTER_MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt,
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": first_image_url,
+                        },
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": second_image_url,
+                        },
+                    },
+                ],
+            }
+        ],
+        "temperature": 0.1,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "campus_find_assessment",
+                "strict": True,
+                "schema": ASSESSMENT_SCHEMA,
+            },
+        },
+    }
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:5000",
+        "X-Title": "CampusFind AI",
+    }
+
+    try:
+        response = requests.post(
+            OPENROUTER_URL,
+            headers=headers,
+            json=payload,
+            timeout=60,
+        )
+
+        if not response.ok:
+            LOGGER.error(
+                "OpenRouter HTTP %s: %s",
+                response.status_code,
+                response.text[:1000],
+            )
+            response.raise_for_status()
+
+        data = response.json()
+
+    except requests.RequestException as exc:
+        LOGGER.exception("OpenRouter API call failed")
+        raise GeminiUnavailable(
+            "OpenRouter could not complete this comparison."
+        ) from exc
+
+    except ValueError as exc:
+        LOGGER.exception("OpenRouter returned invalid JSON")
+        raise MalformedGeminiResponse(
+            "OpenRouter returned an invalid response."
+        ) from exc
+
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise MalformedGeminiResponse(
+            "OpenRouter returned no usable assessment."
+        ) from exc
+
+    if not isinstance(content, str) or not content.strip():
+        raise MalformedGeminiResponse(
+            "OpenRouter returned empty assessment content."
+        )
+
+    try:
+        assessment = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise MalformedGeminiResponse(
+            "OpenRouter returned malformed JSON evidence."
+        ) from exc
+
+    return _normalise_assessment(assessment)
+
+def _call_gemini(item, candidate):
+    """Compatibility wrapper for the existing tests.
+
+    Despite the historical name, the actual provider is OpenRouter.
+    """
+    return _call_openrouter(item, candidate)
 
 def _ai_confidence(assessment: dict[str, Any], signals: dict[str, Any]) -> int:
     """Calculate the visible confidence shown in the UI from named components."""
@@ -451,7 +549,11 @@ def _result_from_assessment(
     return {
         "item": candidate,
         "analysis_mode": "gemini",
-        "analysis_message": "Saved Gemini evidence reused; no new API call was made." if cached else "Gemini reviewed the two supplied photos and report details.",
+        "analysis_message": (
+            "Saved OpenRouter evidence reused; no new API call was made."
+            if cached
+            else "OpenRouter reviewed the two supplied photos and report details."
+        ),
         "evidence_confidence": confidence,
         "screening_score": _context_screening_score(signals),
         "visual_score": assessment["visual_similarity"],
@@ -487,9 +589,9 @@ def _max_candidates() -> int:
 
 
 def find_matches(item: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return opposite-type reports with cached Gemini evidence when available.
+    """Return opposite-type reports with cached OpenRouter evidence when available.
 
-    Gemini requests are intentionally limited to the top context-supported pairs
+    OpenRouter requests are intentionally limited to the top context-supported pairs
     that have two usable image references. Other records remain visible for a
     human to screen; no made-up AI score is shown for them.
     """
@@ -511,7 +613,7 @@ def find_matches(item: dict[str, Any]) -> list[dict[str, Any]]:
 
     results: list[dict[str, Any]] = []
     requests_used = 0
-    gemini_ready = _configured_client() is not None and types is not None
+    gemini_ready = _configured_client() is not None
     for _, candidate, signals in ranked:
         fingerprint = _fingerprint(item, candidate)
         lost_id, found_id = _lost_and_found_ids(item, candidate)
@@ -536,17 +638,17 @@ def find_matches(item: dict[str, Any]) -> list[dict[str, Any]]:
             except ImageEvidenceError:
                 message = "Photo evidence is missing or unreadable, so this pair needs manual review."
             except MalformedGeminiResponse:
-                LOGGER.warning("Discarded malformed Gemini match response for items %s and %s", item.get("id"), candidate.get("id"))
-                message = "Gemini returned unusable evidence for this pair; use the report details for manual review."
+                LOGGER.warning("Discarded malformed OpenRouter match response for items %s and %s", item.get("id"), candidate.get("id"))
+                message = "OpenRouter returned unusable evidence for this pair; use the report details for manual review."
             except GeminiUnavailable:
-                LOGGER.warning("Gemini comparison unavailable for items %s and %s", item.get("id"), candidate.get("id"))
-                message = "Gemini could not complete this pair right now; use the report details for manual review."
+                LOGGER.warning("OpenRouter comparison unavailable for items %s and %s", item.get("id"), candidate.get("id"))
+                message = "OpenRouter could not complete this pair right now; use the report details for manual review."
         elif not gemini_ready:
-            message = "Gemini is not configured, so this is context screening only, not AI visual evidence."
+            message = "OpenRouter is not configured, so this is context screening only, not AI visual evidence."
         elif not has_two_images:
-            message = "Both reports need a photo before Gemini can compare visible evidence."
+            message = "Both reports need a photo before OpenRouter can compare visible evidence."
         else:
-            message = "Gemini review is limited to the most context-compatible photo pairs; this report remains available for manual review."
+            message = "AI review is limited to the most context-compatible photo pairs; this report remains available for manual review."
         results.append(_manual_result(candidate, signals, message))
 
     return results
