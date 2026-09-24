@@ -1,394 +1,975 @@
-"""MySQL persistence for CampusFind AI.
-
-The module keeps database access small and parameterized. It deliberately uses
-the existing ``items`` table and adds ``match_reviews`` only for the office
-workflow, where a potential pair and its AI evidence need an audit trail.
-"""
-
-from __future__ import annotations
-
-import json
 import os
-import re
-from typing import Any
+from datetime import datetime
 
 import mysql.connector
-from dotenv import load_dotenv
 from mysql.connector import Error
+from dotenv import load_dotenv
 
 load_dotenv()
-
-ITEM_TYPES = {"lost", "found"}
-ITEM_STATUSES = {"searching", "under_review", "verified", "returned", "rejected"}
-MATCH_DECISIONS = {"potential", "under_review", "verified", "rejected"}
-_DATABASE_NAME = re.compile(r"^[A-Za-z0-9_]+$")
+class DatabaseError(Exception):
+    """Custom database exception."""
+    pass
 
 
-class DatabaseError(RuntimeError):
-    """A safe, user-facing database error without connection credentials."""
+# =========================================================
+# DATABASE CONNECTION
+# =========================================================
+
+DB_CONFIG = {
+    "host": os.getenv("MYSQL_HOST", "localhost"),
+    "port": int(os.getenv("MYSQL_PORT", "3306")),
+    "user": os.getenv("MYSQL_USER", "root"),
+    "password": os.getenv("MYSQL_PASSWORD", ""),
+}
 
 
-def _settings() -> dict[str, Any]:
-    """Read settings when a connection is opened so tests and deployments work."""
+DB_NAME = os.getenv("MYSQL_DATABASE", "campus_lost_found")
+ITEM_STATUSES = [
+    "searching",
+    "potential_match",
+    "verification_pending",
+    "verified",
+    "returned",
+    "rejected"
+]
+ITEM_TYPES = [
+    "lost",
+    "found"
+]
 
-    database = os.getenv("MYSQL_DATABASE", "campus_lost_found").strip()
-    if not _DATABASE_NAME.fullmatch(database):
-        raise DatabaseError("MYSQL_DATABASE may contain only letters, numbers, and underscores.")
+def get_connection(database=True):
+    config = DB_CONFIG.copy()
 
-    try:
-        port = int(os.getenv("MYSQL_PORT", "3306"))
-    except ValueError as exc:
-        raise DatabaseError("MYSQL_PORT must be a valid number.") from exc
+    if database:
+        config["database"] = DB_NAME
 
-    try:
-        timeout = int(os.getenv("MYSQL_CONNECT_TIMEOUT", "8"))
-    except ValueError as exc:
-        raise DatabaseError("MYSQL_CONNECT_TIMEOUT must be a valid number.") from exc
-
-    return {
-        "host": os.getenv("MYSQL_HOST", "localhost").strip() or "localhost",
-        "port": port,
-        "user": os.getenv("MYSQL_USER", "root").strip() or "root",
-        "password": os.getenv("MYSQL_PASSWORD", ""),
-        "database": database,
-        "connection_timeout": timeout,
-    }
+    return mysql.connector.connect(**config)
 
 
-def _raise_database_error(error: Error) -> DatabaseError:
-    # Do not include driver messages: they can contain host names or credentials.
-    return DatabaseError("The CampusFind database is unavailable. Check the MySQL service and settings.")
+# =========================================================
+# INITIALIZE DATABASE
+# =========================================================
 
-
-def connect_server():
-    """Connect to MySQL without selecting the application database."""
-
-    settings = _settings()
-    settings.pop("database")
-    try:
-        return mysql.connector.connect(**settings)
-    except Error as error:
-        raise _raise_database_error(error) from error
-
-
-def connect():
-    """Connect to the configured CampusFind database."""
+def init_db():
 
     try:
-        return mysql.connector.connect(**_settings())
-    except Error as error:
-        raise _raise_database_error(error) from error
+        # ---------------------------------------------
+        # Create database
+        # ---------------------------------------------
+        conn = get_connection(database=False)
+        cursor = conn.cursor()
 
-
-def _close(cursor=None, connection=None) -> None:
-    if cursor is not None:
-        try:
-            cursor.close()
-        except Error:
-            pass
-    if connection is not None:
-        try:
-            connection.close()
-        except Error:
-            pass
-
-
-def init_db() -> None:
-    """Create the database and schema, including safe migrations for older demos."""
-
-    server_connection = server_cursor = connection = cursor = None
-    settings = _settings()
-    database = settings["database"]
-    try:
-        server_connection = connect_server()
-        server_cursor = server_connection.cursor()
-        server_cursor.execute(
-            f"CREATE DATABASE IF NOT EXISTS `{database}` "
-            "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
-        )
-        server_connection.commit()
-
-        connection = connect()
-        cursor = connection.cursor()
         cursor.execute(
-            """
+            f"CREATE DATABASE IF NOT EXISTS `{DB_NAME}`"
+        )
+
+        cursor.close()
+        conn.close()
+
+        # ---------------------------------------------
+        # Connect to created database
+        # ---------------------------------------------
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        # ---------------------------------------------
+        # ITEMS TABLE
+        # ---------------------------------------------
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS items (
                 id INT AUTO_INCREMENT PRIMARY KEY,
+
                 type VARCHAR(20) NOT NULL,
+
                 name VARCHAR(255) NOT NULL,
+
                 category VARCHAR(100),
+
                 description TEXT,
+
+                private_details TEXT,
+
                 location VARCHAR(255),
+
                 event_time VARCHAR(100),
+
                 image VARCHAR(500),
-                status VARCHAR(50) NOT NULL DEFAULT 'searching',
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                INDEX idx_items_type_status (type, status),
-                INDEX idx_items_created_at (created_at)
-            ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
-            """
-        )
 
-        # Older copies of the hackathon prototype may have been created before
-        # status and created_at gained safe defaults.
-        cursor.execute("SHOW COLUMNS FROM items")
-        existing_columns = {row[0] for row in cursor.fetchall()}
-        if "status" not in existing_columns:
-            cursor.execute("ALTER TABLE items ADD COLUMN status VARCHAR(50) NOT NULL DEFAULT 'searching'")
-        if "created_at" not in existing_columns:
-            cursor.execute("ALTER TABLE items ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP")
+                status VARCHAR(50) DEFAULT 'searching',
 
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS match_reviews (
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # ---------------------------------------------
+        # CLAIMS TABLE
+        # ---------------------------------------------
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS claims (
                 id INT AUTO_INCREMENT PRIMARY KEY,
-                lost_item_id INT NOT NULL,
-                found_item_id INT NOT NULL,
-                input_fingerprint CHAR(64) NOT NULL,
-                analysis_json LONGTEXT,
-                evidence_confidence TINYINT UNSIGNED NULL,
-                analysis_state VARCHAR(30) NOT NULL DEFAULT 'completed',
-                decision VARCHAR(30) NOT NULL DEFAULT 'potential',
-                reviewed_by VARCHAR(100) NULL,
-                reviewed_at DATETIME NULL,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                UNIQUE KEY uq_match_pair (lost_item_id, found_item_id),
-                INDEX idx_review_decision (decision)
-            ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
-            """
-        )
-        connection.commit()
-    except Error as error:
-        if connection is not None:
-            connection.rollback()
-        raise _raise_database_error(error) from error
-    finally:
-        _close(cursor, connection)
-        _close(server_cursor, server_connection)
 
+                item_id INT NOT NULL,
+
+                claimant_name VARCHAR(255) NOT NULL,
+
+                claimant_id VARCHAR(100),
+
+                proof_type VARCHAR(100),
+
+                proof_details TEXT,
+
+                verification_status VARCHAR(50)
+                    DEFAULT 'pending',
+
+                office_remarks TEXT,
+
+                created_at DATETIME
+                    DEFAULT CURRENT_TIMESTAMP,
+
+                verified_at DATETIME,
+
+                verified_by VARCHAR(255),
+
+                FOREIGN KEY (item_id)
+                    REFERENCES items(id)
+                    ON DELETE CASCADE
+            )
+        """)
+        # ---------------------------------------------
+        # MATCH REVIEWS TABLE
+        # ---------------------------------------------
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS match_reviews (
+
+                id INT AUTO_INCREMENT PRIMARY KEY,
+
+                item_id INT NOT NULL,
+
+                candidate_id INT NOT NULL,
+
+                image_score FLOAT DEFAULT 0,
+
+                text_score FLOAT DEFAULT 0,
+
+                location_score FLOAT DEFAULT 0,
+
+                time_score FLOAT DEFAULT 0,
+
+                overall_score FLOAT DEFAULT 0,
+
+                explanation TEXT,
+
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+                UNIQUE KEY unique_match (
+                    item_id,
+                    candidate_id
+                ),
+
+                FOREIGN KEY (item_id)
+                    REFERENCES items(id)
+                    ON DELETE CASCADE,
+
+                FOREIGN KEY (candidate_id)
+                    REFERENCES items(id)
+                    ON DELETE CASCADE
+            )
+    """)
+
+        conn.commit()
+
+        cursor.close()
+        conn.close()
+
+        print("MySQL database initialized successfully.")
+
+    except Error as e:
+        print("Database initialization error:", e)
+
+
+# =========================================================
+# ADD ITEM
+# =========================================================
+
+# =========================================================
+# ADD ITEM
+# =========================================================
 
 def add_item(
-    item_type: str,
-    name: str,
-    category: str,
-    description: str,
-    location: str,
-    event_time: str,
-    image: str,
-) -> int:
-    if item_type not in ITEM_TYPES:
-        raise ValueError("Invalid item type.")
+    item_type,
+    name,
+    category,
+    description,
+    location,
+    event_time,
+    image,
+    private_details=""
+):
+    """
+    Add a lost/found item.
 
-    connection = cursor = None
+    private_details is optional so the existing app.py
+    continues to work.
+    """
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
     try:
-        connection = connect()
-        cursor = connection.cursor()
-        cursor.execute(
-            """
-            INSERT INTO items (type, name, category, description, location, event_time, image, status, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, 'searching', NOW())
-            """,
-            (item_type, name, category, description, location, event_time, image),
-        )
-        connection.commit()
-        return int(cursor.lastrowid)
-    except Error as error:
-        if connection is not None:
-            connection.rollback()
-        raise _raise_database_error(error) from error
-    finally:
-        _close(cursor, connection)
 
+        query = """
+            INSERT INTO items
+            (
+                type,
+                name,
+                category,
+                description,
+                private_details,
+                location,
+                event_time,
+                image,
+                status,
+                created_at
+            )
+            VALUES
+            (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s
+            )
+        """
+
+        values = (
+            item_type,
+            name,
+            category,
+            description,
+            private_details,
+            location,
+            event_time,
+            image,
+            "searching",
+            datetime.now()
+        )
+
+        cursor.execute(query, values)
+
+        item_id = cursor.lastrowid
+
+        conn.commit()
+
+        return item_id
+
+    except Error as exc:
+
+        conn.rollback()
+
+        raise DatabaseError(
+            f"Could not add item: {exc}"
+        ) from exc
+
+    finally:
+
+        cursor.close()
+        conn.close()
+
+
+# =========================================================
+# GET SINGLE ITEM
+# =========================================================
+
+def get_item(item_id):
+
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute(
+        """
+        SELECT *
+        FROM items
+        WHERE id = %s
+        """,
+        (item_id,)
+    )
+
+    item = cursor.fetchone()
+
+    cursor.close()
+    conn.close()
+
+    return item
+
+
+# =========================================================
+# GET ALL ITEMS
+# =========================================================
+
+# =========================================================
+# GET ITEMS
+# =========================================================
 
 def get_items(
-    item_type: str | None = None,
-    *,
-    query: str = "",
-    status: str | None = None,
-    category: str | None = None,
-    limit: int | None = None,
-) -> list[dict[str, Any]]:
-    """Fetch items with optional, fully parameterized public/admin filters."""
+    item_type=None,
+    query=None,
+    category=None,
+    limit=50
+):
+    """
+    Get items with optional filtering.
 
-    if item_type is not None and item_type not in ITEM_TYPES:
-        raise ValueError("Invalid item type.")
-    if status is not None and status not in ITEM_STATUSES:
-        raise ValueError("Invalid item status.")
+    Supports calls such as:
 
-    clauses: list[str] = []
-    params: list[Any] = []
-    if item_type:
-        clauses.append("type = %s")
-        params.append(item_type)
-    if status:
-        clauses.append("status = %s")
-        params.append(status)
-    if category:
-        clauses.append("category = %s")
-        params.append(category)
-    if query:
-        clauses.append("(name LIKE %s OR category LIKE %s OR description LIKE %s OR location LIKE %s)")
-        term = f"%{query.strip()}%"
-        params.extend([term, term, term, term])
+        get_items()
 
-    sql = "SELECT * FROM items"
-    if clauses:
-        sql += " WHERE " + " AND ".join(clauses)
-    sql += " ORDER BY created_at DESC, id DESC"
-    if limit is not None:
-        sql += " LIMIT %s"
-        params.append(max(1, min(int(limit), 100)))
+        get_items("lost")
 
-    connection = cursor = None
-    try:
-        connection = connect()
-        cursor = connection.cursor(dictionary=True)
-        cursor.execute(sql, tuple(params))
-        return cursor.fetchall()
-    except Error as error:
-        raise _raise_database_error(error) from error
-    finally:
-        _close(cursor, connection)
-
-
-def get_item(item_id: int) -> dict[str, Any] | None:
-    connection = cursor = None
-    try:
-        connection = connect()
-        cursor = connection.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM items WHERE id = %s", (item_id,))
-        return cursor.fetchone()
-    except Error as error:
-        raise _raise_database_error(error) from error
-    finally:
-        _close(cursor, connection)
-
-
-def update_status(item_id: int, status: str) -> bool:
-    if status not in ITEM_STATUSES:
-        raise ValueError("Invalid item status.")
-    connection = cursor = None
-    try:
-        connection = connect()
-        cursor = connection.cursor()
-        cursor.execute("UPDATE items SET status = %s WHERE id = %s", (status, item_id))
-        connection.commit()
-        return cursor.rowcount > 0
-    except Error as error:
-        if connection is not None:
-            connection.rollback()
-        raise _raise_database_error(error) from error
-    finally:
-        _close(cursor, connection)
-
-
-def _decode_review(row: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not row:
-        return None
-    raw_analysis = row.pop("analysis_json", None)
-    try:
-        row["assessment"] = json.loads(raw_analysis) if raw_analysis else None
-    except (TypeError, json.JSONDecodeError):
-        row["assessment"] = None
-    return row
-
-
-def get_match_review(lost_item_id: int, found_item_id: int) -> dict[str, Any] | None:
-    connection = cursor = None
-    try:
-        connection = connect()
-        cursor = connection.cursor(dictionary=True)
-        cursor.execute(
-            "SELECT * FROM match_reviews WHERE lost_item_id = %s AND found_item_id = %s",
-            (lost_item_id, found_item_id),
+        get_items(
+            "lost",
+            query="phone",
+            category="Mobile Phone",
+            limit=12
         )
-        return _decode_review(cursor.fetchone())
-    except Error as error:
-        raise _raise_database_error(error) from error
-    finally:
-        _close(cursor, connection)
+    """
 
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
 
-def get_match_review_by_id(review_id: int) -> dict[str, Any] | None:
-    connection = cursor = None
     try:
-        connection = connect()
-        cursor = connection.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM match_reviews WHERE id = %s", (review_id,))
-        return _decode_review(cursor.fetchone())
-    except Error as error:
-        raise _raise_database_error(error) from error
-    finally:
-        _close(cursor, connection)
 
+        sql = """
+            SELECT *
+            FROM items
+            WHERE 1 = 1
+        """
+
+        params = []
+
+        # -------------------------------------------------
+        # Filter by lost/found
+        # -------------------------------------------------
+
+        if item_type:
+            sql += """
+                AND type = %s
+            """
+            params.append(item_type)
+
+        # -------------------------------------------------
+        # Search text
+        # -------------------------------------------------
+
+        if query:
+            search = f"%{query.strip()}%"
+
+            sql += """
+                AND (
+                    name LIKE %s
+                    OR category LIKE %s
+                    OR description LIKE %s
+                    OR location LIKE %s
+                )
+            """
+
+            params.extend([
+                search,
+                search,
+                search,
+                search
+            ])
+
+        # -------------------------------------------------
+        # Filter category
+        # -------------------------------------------------
+
+        if category:
+            sql += """
+                AND category = %s
+            """
+            params.append(category)
+
+        # -------------------------------------------------
+        # Don't show returned/rejected items
+        # -------------------------------------------------
+
+        sql += """
+            AND status NOT IN ('returned', 'rejected')
+        """
+
+        # -------------------------------------------------
+        # Newest first
+        # -------------------------------------------------
+
+        sql += """
+            ORDER BY created_at DESC
+            LIMIT %s
+        """
+
+        # MySQL connector requires LIMIT as parameter
+        params.append(int(limit))
+
+        cursor.execute(sql, tuple(params))
+
+        return cursor.fetchall()
+
+    except Error as exc:
+
+        raise DatabaseError(
+            f"Could not get items: {exc}"
+        ) from exc
+
+    finally:
+
+        cursor.close()
+        conn.close()
+
+
+# =========================================================
+# GET OPPOSITE TYPE ITEMS
+# =========================================================
+
+def get_matching_items(item_type):
+
+    opposite_type = (
+        "found"
+        if item_type == "lost"
+        else "lost"
+    )
+
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute(
+        """
+        SELECT *
+        FROM items
+        WHERE type = %s
+        AND status NOT IN ('returned', 'rejected')
+        ORDER BY created_at DESC
+        """,
+        (opposite_type,)
+    )
+
+    items = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return items
+
+
+# =========================================================
+# UPDATE ITEM STATUS
+# =========================================================
+
+def update_status(item_id, status):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        UPDATE items
+        SET status = %s
+        WHERE id = %s
+        """,
+        (status, item_id)
+    )
+
+    conn.commit()
+
+    cursor.close()
+    conn.close()
+
+
+# =========================================================
+# CREATE CLAIM
+# =========================================================
+
+def create_claim(
+    item_id,
+    claimant_name,
+    claimant_id,
+    proof_type,
+    proof_details
+):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    query = """
+        INSERT INTO claims
+        (
+            item_id,
+            claimant_name,
+            claimant_id,
+            proof_type,
+            proof_details,
+            verification_status,
+            created_at
+        )
+        VALUES
+        (
+            %s, %s, %s, %s, %s, %s, %s
+        )
+    """
+
+    values = (
+        item_id,
+        claimant_name,
+        claimant_id,
+        proof_type,
+        proof_details,
+        "pending",
+        datetime.now()
+    )
+
+    cursor.execute(query, values)
+
+    claim_id = cursor.lastrowid
+
+    conn.commit()
+
+    cursor.close()
+    conn.close()
+
+    return claim_id
+
+
+# =========================================================
+# GET CLAIM
+# =========================================================
+
+def get_claim(claim_id):
+
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute(
+        """
+        SELECT
+            c.*,
+            i.name AS item_name,
+            i.type AS item_type,
+            i.category,
+            i.description,
+            i.private_details,
+            i.location,
+            i.event_time,
+            i.image,
+            i.status AS item_status
+        FROM claims c
+        JOIN items i
+            ON c.item_id = i.id
+        WHERE c.id = %s
+        """,
+        (claim_id,)
+    )
+
+    claim = cursor.fetchone()
+
+    cursor.close()
+    conn.close()
+
+    return claim
+
+
+# =========================================================
+# GET ALL CLAIMS
+# =========================================================
+
+def get_claims():
+
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT
+            c.*,
+            i.name AS item_name,
+            i.type AS item_type,
+            i.image,
+            i.status AS item_status
+        FROM claims c
+        JOIN items i
+            ON c.item_id = i.id
+        ORDER BY c.created_at DESC
+    """)
+
+    claims = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return claims
+
+
+# =========================================================
+# GET PENDING CLAIMS
+# =========================================================
+
+def get_pending_claims():
+
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT
+            c.*,
+            i.name AS item_name,
+            i.type AS item_type,
+            i.category,
+            i.description,
+            i.private_details,
+            i.location,
+            i.event_time,
+            i.image,
+            i.status AS item_status
+        FROM claims c
+        JOIN items i
+            ON c.item_id = i.id
+        WHERE c.verification_status = 'pending'
+        ORDER BY c.created_at ASC
+    """)
+
+    claims = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return claims
+
+
+# =========================================================
+# UPDATE CLAIM STATUS
+# =========================================================
+
+def update_claim_status(
+    claim_id,
+    verification_status,
+    office_remarks="",
+    verified_by=None
+):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    if verification_status == "verified":
+
+        cursor.execute(
+            """
+            UPDATE claims
+            SET
+                verification_status = %s,
+                office_remarks = %s,
+                verified_at = %s,
+                verified_by = %s
+            WHERE id = %s
+            """,
+            (
+                verification_status,
+                office_remarks,
+                datetime.now(),
+                verified_by,
+                claim_id
+            )
+        )
+
+    else:
+
+        cursor.execute(
+            """
+            UPDATE claims
+            SET
+                verification_status = %s,
+                office_remarks = %s
+            WHERE id = %s
+            """,
+            (
+                verification_status,
+                office_remarks,
+                claim_id
+            )
+        )
+
+    conn.commit()
+
+    cursor.close()
+    conn.close()
+
+
+# =========================================================
+# CHECK EXISTING CLAIM
+# =========================================================
+
+def has_pending_claim(item_id):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT COUNT(*)
+        FROM claims
+        WHERE item_id = %s
+        AND verification_status = 'pending'
+        """,
+        (item_id,)
+    )
+
+    count = cursor.fetchone()[0]
+
+    cursor.close()
+    conn.close()
+
+    return count > 0
+# =========================================================
+# GET MATCH REVIEW
+# =========================================================
+
+# =========================================================
+# GET MATCH REVIEW
+# =========================================================
+
+def get_match_review(lost_item_id, found_item_id):
+    """
+    Get the cached AI review for a lost/found pair.
+    """
+
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    try:
+        cursor.execute(
+            """
+            SELECT *
+            FROM match_reviews
+            WHERE lost_item_id = %s
+              AND found_item_id = %s
+            LIMIT 1
+            """,
+            (lost_item_id, found_item_id)
+        )
+
+        return cursor.fetchone()
+
+    except Error as exc:
+        raise DatabaseError(
+            f"Could not get match review: {exc}"
+        ) from exc
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
+# =========================================================
+# SAVE MATCH REVIEW
+# =========================================================
+
+# =========================================================
+# SAVE MATCH REVIEW
+# =========================================================
 
 def save_match_review(
-    lost_item_id: int,
-    found_item_id: int,
-    fingerprint: str,
-    assessment: dict[str, Any],
-    evidence_confidence: int,
-) -> int:
-    """Cache completed AI evidence without overwriting a staff decision."""
+    lost_item_id,
+    found_item_id,
+    input_fingerprint,
+    assessment,
+    confidence
+):
+    """
+    Save an AI match analysis using the existing
+    match_reviews table schema.
 
-    connection = cursor = None
+    Parameters:
+        lost_item_id      - ID of lost report
+        found_item_id    - ID of found report
+        input_fingerprint - fingerprint of the compared inputs
+        assessment       - Gemini analysis dictionary
+        confidence       - AI evidence confidence
+    """
+
+    import json
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
     try:
-        connection = connect()
-        cursor = connection.cursor()
+
+        # Convert Gemini assessment dictionary to JSON
+        if isinstance(assessment, str):
+            analysis_json = assessment
+        else:
+            analysis_json = json.dumps(
+                assessment,
+                ensure_ascii=False
+            )
+
+        # Keep confidence safely inside 0-100
+        try:
+            confidence_value = int(confidence)
+        except (TypeError, ValueError):
+            confidence_value = 0
+
+        confidence_value = max(
+            0,
+            min(100, confidence_value)
+        )
+
         cursor.execute(
             """
             INSERT INTO match_reviews
-                (lost_item_id, found_item_id, input_fingerprint, analysis_json, evidence_confidence, analysis_state)
-            VALUES (%s, %s, %s, %s, %s, 'completed')
+            (
+                lost_item_id,
+                found_item_id,
+                input_fingerprint,
+                analysis_json,
+                evidence_confidence,
+                analysis_state,
+                decision,
+                created_at,
+                updated_at
+            )
+            VALUES
+            (
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                'completed',
+                'potential',
+                NOW(),
+                NOW()
+            )
             ON DUPLICATE KEY UPDATE
                 input_fingerprint = VALUES(input_fingerprint),
                 analysis_json = VALUES(analysis_json),
                 evidence_confidence = VALUES(evidence_confidence),
-                analysis_state = 'completed'
+                analysis_state = 'completed',
+                updated_at = NOW()
             """,
             (
                 lost_item_id,
                 found_item_id,
-                fingerprint,
-                json.dumps(assessment, ensure_ascii=False),
-                max(0, min(100, int(evidence_confidence))),
-            ),
+                input_fingerprint,
+                analysis_json,
+                confidence_value
+            )
         )
-        connection.commit()
-        cursor.execute(
-            "SELECT id FROM match_reviews WHERE lost_item_id = %s AND found_item_id = %s",
-            (lost_item_id, found_item_id),
-        )
-        return int(cursor.fetchone()[0])
-    except Error as error:
-        if connection is not None:
-            connection.rollback()
-        raise _raise_database_error(error) from error
+
+        conn.commit()
+
+        return cursor.lastrowid
+
+    except Error as exc:
+
+        conn.rollback()
+
+        raise DatabaseError(
+            f"Could not save match review: {exc}"
+        ) from exc
+
     finally:
-        _close(cursor, connection)
 
+        cursor.close()
+        conn.close()
 
-def set_match_decision(review_id: int, decision: str, reviewed_by: str) -> bool:
-    if decision not in MATCH_DECISIONS:
-        raise ValueError("Invalid match decision.")
-    connection = cursor = None
+# =========================================================
+# GET MATCH REVIEW BY ID
+# =========================================================
+
+def get_match_review_by_id(item_id):
+    """
+    Get an item and its possible opposite-type matches
+    for the office review page.
+    """
+
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
     try:
-        connection = connect()
-        cursor = connection.cursor()
+        # Get the main item
         cursor.execute(
             """
-            UPDATE match_reviews
-            SET decision = %s, reviewed_by = %s, reviewed_at = NOW()
+            SELECT *
+            FROM items
             WHERE id = %s
             """,
-            (decision, reviewed_by[:100], review_id),
+            (item_id,)
         )
-        connection.commit()
-        return cursor.rowcount > 0
-    except Error as error:
-        if connection is not None:
-            connection.rollback()
-        raise _raise_database_error(error) from error
+
+        item = cursor.fetchone()
+
+        if not item:
+            return None
+
+        # Find opposite type
+        opposite_type = (
+            "found"
+            if item["type"] == "lost"
+            else "lost"
+        )
+
+        cursor.execute(
+            """
+            SELECT *
+            FROM items
+            WHERE type = %s
+              AND id != %s
+              AND status NOT IN ('returned', 'rejected')
+            ORDER BY created_at DESC
+            """,
+            (opposite_type, item_id)
+        )
+
+        candidates = cursor.fetchall()
+
+        return {
+            "item": item,
+            "candidates": candidates
+        }
+
+    except Error as exc:
+        raise DatabaseError(
+            f"Could not load match review: {exc}"
+        ) from exc
+
     finally:
-        _close(cursor, connection)
+        cursor.close()
+        conn.close()
+
+def set_match_decision(item_id, decision, notes=""):
+    """
+    Update the office decision/status for an item.
+    """
+
+    if decision not in ITEM_STATUSES:
+        raise DatabaseError(
+            f"Invalid item status: {decision}"
+        )
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(
+            """
+            UPDATE items
+            SET status = %s
+            WHERE id = %s
+            """,
+            (decision, item_id)
+        )
+
+        conn.commit()
+
+    except Error as exc:
+        conn.rollback()
+
+        raise DatabaseError(
+            f"Could not set match decision: {exc}"
+        ) from exc
+
+    finally:
+        cursor.close()
+        conn.close()
