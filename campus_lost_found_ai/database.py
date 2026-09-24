@@ -4,7 +4,7 @@ from datetime import datetime
 import mysql.connector
 from mysql.connector import Error
 from dotenv import load_dotenv
-
+import json
 load_dotenv()
 class DatabaseError(Exception):
     """Custom database exception."""
@@ -311,6 +311,7 @@ def get_items(
     item_type=None,
     query=None,
     category=None,
+    status=None,
     limit=50
 ):
     """
@@ -385,6 +386,22 @@ def get_items(
                 AND category = %s
             """
             params.append(category)
+
+        # -------------------------------------------------
+        # Filter by status
+        # -------------------------------------------------
+
+        if status:
+            sql += """
+                AND status = %s
+            """
+            params.append(status)
+        else:
+            # Public/default listing:
+            # don't show returned/rejected items
+            sql += """
+                AND status NOT IN ('returned', 'rejected')
+            """
 
         # -------------------------------------------------
         # Don't show returned/rejected items
@@ -476,8 +493,12 @@ def update_status(item_id, status):
 
     conn.commit()
 
+    updated = cursor.rowcount > 0
+
     cursor.close()
     conn.close()
+
+    return updated
 
 
 # =========================================================
@@ -732,6 +753,8 @@ def has_pending_claim(item_id):
 def get_match_review(lost_item_id, found_item_id):
     """
     Get the cached AI review for a lost/found pair.
+    Converts analysis_json into the assessment field expected
+    by matching.py.
     """
 
     conn = get_connection()
@@ -749,7 +772,25 @@ def get_match_review(lost_item_id, found_item_id):
             (lost_item_id, found_item_id)
         )
 
-        return cursor.fetchone()
+        review = cursor.fetchone()
+
+        if not review:
+            return None
+
+        analysis_json = review.get("analysis_json")
+
+        if analysis_json:
+            try:
+                if isinstance(analysis_json, str):
+                    review["assessment"] = json.loads(analysis_json)
+                else:
+                    review["assessment"] = analysis_json
+            except (TypeError, ValueError, json.JSONDecodeError):
+                review["assessment"] = None
+        else:
+            review["assessment"] = None
+
+        return review
 
     except Error as exc:
         raise DatabaseError(
@@ -878,56 +919,27 @@ def save_match_review(
 # GET MATCH REVIEW BY ID
 # =========================================================
 
-def get_match_review_by_id(item_id):
+def get_match_review_by_id(review_id):
     """
-    Get an item and its possible opposite-type matches
-    for the office review page.
+    Get a match review by its match_reviews.id.
+    Used by the office verification dashboard.
     """
 
     conn = get_connection()
     cursor = conn.cursor(dictionary=True)
 
     try:
-        # Get the main item
         cursor.execute(
             """
             SELECT *
-            FROM items
+            FROM match_reviews
             WHERE id = %s
+            LIMIT 1
             """,
-            (item_id,)
+            (review_id,)
         )
 
-        item = cursor.fetchone()
-
-        if not item:
-            return None
-
-        # Find opposite type
-        opposite_type = (
-            "found"
-            if item["type"] == "lost"
-            else "lost"
-        )
-
-        cursor.execute(
-            """
-            SELECT *
-            FROM items
-            WHERE type = %s
-              AND id != %s
-              AND status NOT IN ('returned', 'rejected')
-            ORDER BY created_at DESC
-            """,
-            (opposite_type, item_id)
-        )
-
-        candidates = cursor.fetchall()
-
-        return {
-            "item": item,
-            "candidates": candidates
-        }
+        return cursor.fetchone()
 
     except Error as exc:
         raise DatabaseError(
@@ -938,14 +950,22 @@ def get_match_review_by_id(item_id):
         cursor.close()
         conn.close()
 
-def set_match_decision(item_id, decision, notes=""):
+def set_match_decision(review_id, decision, reviewed_by="office"):
     """
-    Update the office decision/status for an item.
+    Save the office decision for a match review.
+
+    This updates the match_reviews record, not the item status.
     """
 
-    if decision not in ITEM_STATUSES:
+    allowed_decisions = {
+        "under_review",
+        "verified",
+        "rejected",
+    }
+
+    if decision not in allowed_decisions:
         raise DatabaseError(
-            f"Invalid item status: {decision}"
+            f"Invalid match decision: {decision}"
         )
 
     conn = get_connection()
@@ -954,14 +974,24 @@ def set_match_decision(item_id, decision, notes=""):
     try:
         cursor.execute(
             """
-            UPDATE items
-            SET status = %s
+            UPDATE match_reviews
+            SET
+                decision = %s,
+                reviewed_by = %s,
+                reviewed_at = NOW(),
+                updated_at = NOW()
             WHERE id = %s
             """,
-            (decision, item_id)
+            (
+                decision,
+                reviewed_by,
+                review_id
+            )
         )
 
         conn.commit()
+
+        return cursor.rowcount > 0
 
     except Error as exc:
         conn.rollback()
