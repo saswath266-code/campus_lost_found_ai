@@ -54,7 +54,7 @@
       {% endif %}
 
       <div class="signal-grid" aria-label="Transparent comparison signals">
-        {% if r.visual_score is not none %}<div><span>Gemini visual evidence</span><b>{{ r.visual_score }}%</b></div>{% endif %}
+        {% if r.visual_score is not none %}<div><span>AI visual evidence</span><b>{{ r.visual_score }}%</b></div>{% endif %}
         <div><span>Category</span><b>{{ r.scores.category_score }}%</b></div>
         <div><span>Report detail overlap</span><b>{{ r.scores.description_score }}%</b></div>
         <div><span>Location compatibility</span><b>{{ r.scores.location_score }}%</b></div>
@@ -79,3 +79,4 @@
   <div class="empty"><h2>No opposite-type reports yet</h2><p>When another report is added, it will appear here for careful review.</p></div>
 {% endfor %}
 {% endblock %}
+

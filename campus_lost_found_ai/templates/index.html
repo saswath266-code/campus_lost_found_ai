@@ -8,14 +8,14 @@
   <div class="hero-copy">
     <p class="eyebrow">HACM121 &middot; SMART CAMPUS RECOVERY</p>
     <h1>Lost something?<br><span>Start the way back.</span></h1>
-    <p class="lede">CampusFind AI pairs lost and found reports using report details, location, timing, and optional Gemini visual evidence. Every return is verified by the campus office.</p>
+    <p class="lede">CampusFind AI pairs lost and found reports using report details, location, timing, and optional AI visual evidence. Every return is verified by the campus office.</p>
     <div class="actions">
       <a class="btn primary" href="{{ url_for('report_lost') }}">I lost something</a>
       <a class="btn secondary" href="{{ url_for('report_found') }}">I found something</a>
     </div>
     <div class="status-chip {% if ai_status.enabled %}ok{% else %}warn{% endif %}">
       <span aria-hidden="true">&#9679;</span>
-      {% if ai_status.enabled %}Gemini visual evidence ready{% else %}Context screening only{% endif %}
+      {% if ai_status.enabled %}AI visual evidence ready{% else %}Context screening only{% endif %}
     </div>
   </div>
   <aside class="hero-card" aria-label="How CampusFind works">

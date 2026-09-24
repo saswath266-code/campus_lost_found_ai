@@ -50,7 +50,22 @@ ASSESSMENT_SCHEMA = {
             "type": "integer",
             "minimum": 0,
             "maximum": 100,
-            "description": "Visual similarity based only on the supplied photos.",
+            "description": (
+                "Score visual resemblance between the two supplied photos only. "
+                "This measures how visually similar the objects appear, NOT proof "
+                "that they are the exact same physical object or proof of ownership. "
+                "Use this scale: "
+                "0-20 = clearly different objects; "
+                "21-40 = weak visual resemblance; "
+                "41-60 = moderate visual resemblance; "
+                "61-80 = strong visual resemblance with several matching visible features; "
+                "81-100 = very strong visual resemblance with multiple distinctive "
+                "matching visible features. "
+                "Do not give 0 merely because the photos cannot prove exact identity. "
+                "If the objects visibly resemble each other but exact identity cannot "
+                "be established, give an appropriate resemblance score and explain "
+                "the uncertainty in missing_evidence."
+            ),
         },
         "category_compatibility": {
             "type": "string",
@@ -408,17 +423,14 @@ def _call_openrouter(item: dict[str, Any], candidate: dict[str, Any]) -> dict[st
     second_image_url = f"data:{second_mime};base64,{second_image_b64}"
 
     prompt = (
-        "You support a campus lost-and-found office. "
-        "Compare Report A and Report B and their photos. "
-        "Assess object/category compatibility; visible appearance, color, shape, "
-        "brand or model when actually visible; and distinctive physical "
-        "characteristics such as stickers, cases, scratches, damage, or missing parts. "
-        "Compare the supplied report descriptions and treat location and time only "
-        "as supporting context. "
-        "Do not infer ownership, identity, or facts not visible or supplied. "
-        "Never say the objects are definitely the same. "
-        "When photos are unclear or evidence conflicts, state that plainly and "
-        "lower visual_similarity. "
+        "Score visual_similarity according to the defined 0-100 resemblance scale. "
+        "Do not use visual_similarity as an identity or ownership score. "
+        "Do not give a score of 0 simply because the photos cannot prove exact identity. "
+        "If both photos visibly show similar objects, colors, shapes, camera layouts, "
+        "or other matching features, reflect that resemblance in visual_similarity. "
+        "If the photos are blurry or low-resolution, reduce the score only to the "
+        "extent that the visual evidence is actually uncertain. "
+        "Use missing_evidence to explain what prevents stronger identification. "
         f"Report A: {json.dumps(_safe_report_data(item), ensure_ascii=False)}\n"
         f"Report B: {json.dumps(_safe_report_data(candidate), ensure_ascii=False)}\n"
         "The first supplied image is Report A and the second is Report B."
